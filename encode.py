@@ -15,13 +15,17 @@ from redis.commands.search.field import VectorField, TextField
 from redis.commands.search.index_definition import IndexDefinition, IndexType
 from config import *
 
+# ----------------------------
 # Text normalization
+# ----------------------------
 def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFC", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+# ----------------------------
 # Language detection
+# ----------------------------
 def detect_lang(text: str, threshold=0.05) -> str:
     ml_chars, total_chars = 0, 0
     for ch in text:
@@ -29,13 +33,21 @@ def detect_lang(text: str, threshold=0.05) -> str:
             total_chars += 1
             if "\u0D00" <= ch <= "\u0D7F":
                 ml_chars += 1
+
     if total_chars == 0:
         return "en"
+
     return "ml" if (ml_chars / total_chars) >= threshold else "en"
 
-# Redis
+# ----------------------------
+# Redis helpers
+# ----------------------------
 def get_redis():
-    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
+    r = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        decode_responses=False
+    )
     r.ping()
     print("Connected to Redis Stack")
     return r
@@ -59,7 +71,7 @@ def create_index(r):
             {
                 "TYPE": "FLOAT32",
                 "DIM": VECTOR_DIM,
-                "DISTANCE_METRIC": "COSINE"
+                "DISTANCE_METRIC": "COSINE",
             },
         ),
     ]
@@ -68,7 +80,7 @@ def create_index(r):
         schema,
         definition=IndexDefinition(
             prefix=[REDIS_PREFIX],
-            index_type=IndexType.HASH
+            index_type=IndexType.HASH,
         ),
     )
     print("Redis index created")
@@ -76,12 +88,16 @@ def create_index(r):
 def file_already_ingested(r, filename: str) -> bool:
     return r.exists(f"{REDIS_PREFIX}{filename}:0")
 
+# ----------------------------
 # Chunking
+# ----------------------------
 def chunk_text(text, max_chars=300):
     for i in range(0, len(text), max_chars):
-        yield text[i:i + max_chars]
+        yield text[i : i + max_chars]
 
+# ----------------------------
 # Ingest PDFs
+# ----------------------------
 def ingest():
     r = get_redis()
     create_index(r)
@@ -89,20 +105,21 @@ def ingest():
     model = SentenceTransformer(MODEL_NAME)
 
     print("Reading PDFs from:", PDF_DIR)
-    print("Files:", os.listdir(PDF_DIR))
+    files = os.listdir(PDF_DIR)
+    print("Files:", files)
 
-    for pdf in os.listdir(PDF_DIR):
-    if not pdf.lower().endswith(".pdf"):
-        continue
+    for pdf in files:
+        if not pdf.lower().endswith(".pdf"):
+            continue
 
-    if file_already_ingested(r, pdf):
-        print(f"Skipping already ingested file: {pdf}")
-        continue
+        if file_already_ingested(r, pdf):
+            print(f"Skipping already ingested file: {pdf}")
+            continue
 
-    pdf_path = os.path.join(PDF_DIR, pdf)
-    relative_path = os.path.relpath(pdf_path, BASE_DIR)
+        pdf_path = os.path.join(PDF_DIR, pdf)
+        relative_path = os.path.relpath(pdf_path, BASE_DIR)
 
-    print(f"\nProcessing: {pdf}")
+        print(f"\n📄 Processing: {pdf}")
 
         try:
             raw_text = extract_text_from_pdf(pdf_path)
@@ -122,7 +139,7 @@ def ingest():
                 vec = model.encode(
                     chunk,
                     convert_to_numpy=True,
-                    normalize_embeddings=True
+                    normalize_embeddings=True,
                 ).astype(np.float32)
 
                 r.hset(
@@ -139,9 +156,13 @@ def ingest():
             print(f"Finished {pdf}")
 
         except Exception:
+            print(f"Error processing {pdf}")
             traceback.print_exc()
 
     print("\n🎉 Ingestion complete")
 
+# ----------------------------
+# Entry point
+# ----------------------------
 if __name__ == "__main__":
     ingest()
